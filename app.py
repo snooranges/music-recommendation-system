@@ -6,7 +6,26 @@ from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 
 # Set page config for a wider layout and a nice title
-st.set_page_config(page_title="🎵 Music Recommender", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="🎵 Music Recommender", layout="wide", initial_sidebar_state="collapsed") # Changed sidebar_state to collapsed as it's less critical now
+
+# --- Custom CSS for Background Image ---
+# Replace 'YOUR_IMAGE_URL_HERE' with the actual public URL of your background image
+st.markdown(
+    """
+    <style>
+    .stApp {
+        background-image: url("YOUR_IMAGE_URL_HERE");
+        background-size: cover;
+        background-position: center;
+        background-repeat: no-repeat;
+        background-attachment: fixed;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+# --- End Custom CSS ---
+
 
 # --- Data Loading ---
 @st.cache_data
@@ -112,39 +131,12 @@ def recommend_by_danceability(target_danceability, df, n=5):
 
 st.title("🎧 Music Recommendation System")
 
-# About section using an expander with detailed description
-with st.expander("About this App"):
-    st.markdown(
-        """
-        This application recommends music based on various criteria using a comprehensive dataset of track features.
-        
-        **Techniques Used:**
-        - **Data Handling:** Utilizes `pandas` for efficient loading, cleaning, and manipulation of the music dataset.
-        - **Feature Scaling:** Employs `StandardScaler` from `scikit-learn` to normalize numerical audio features, ensuring that all features contribute equally to similarity calculations.
-        - **Content-Based Filtering:** Implements content-based recommendation logic. For track and mood-based recommendations, `cosine_similarity` from `scikit-learn` is used to find songs that are similar in their audio characteristics.
-        - **User Interface:** Built entirely with `Streamlit`, allowing for an interactive and user-friendly web application with minimal code.
-        
-        **Explore recommendations based on:**
-        - **Track Features**: Find songs similar to a selected track based on its audio characteristics.
-        - **Mood**: Get songs that align with a chosen mood (e.g., Happy, Sad, Energetic).
-        - **Artist**: Discover other songs by your favorite artist.
-        - **Danceability**: Find songs suitable for dancing based on a desired 'danceability' score (0.0 to 1.0).
-        """
-    )
-    st.write("---") 
-    st.markdown("**Developed by:**")
-    st.markdown("- Praneeth (2453-207-33085)")
-    st.markdown("- Rishi (245322733124)")
-    st.markdown("- Kevin (245322733127)")
-    st.markdown("---")
-    st.markdown("Built with ❤️ using Streamlit and scikit-learn.")
-
-
-# Use a sidebar for main navigation/mode selection
-st.sidebar.header("Recommendation Options")
-mode = st.sidebar.radio(
-    "Choose recommendation type:", 
-    ["🎶 Based on track features", "😊 Based on mood only", "🎤 Based on artist", "🕺 Based on danceability"]
+# Recommendation options moved to main tab
+st.header("Choose Recommendation Type:")
+mode = st.radio(
+    "Select your preferred method:", # Label changed slightly as it's not in sidebar anymore
+    ["🎶 Based on track features", "😊 Based on mood only", "🎤 Based on artist", "🕺 Based on danceability"],
+    horizontal=True # Display radio buttons horizontally for better main tab layout
 )
 
 # Main content area based on selected mode
@@ -219,10 +211,39 @@ elif mode == "🕺 Based on danceability":
             st.warning("⚠️ Please select a danceability value.")
 
 
-# Dataset sample in the sidebar
+# Dataset sample in the sidebar (remains in sidebar)
 st.sidebar.markdown("---")
 st.sidebar.subheader("Dataset Sample (First 5 Rows)")
 st.sidebar.dataframe(df.head(), height=200)
+
+
+# --- About section moved to the very bottom of the main content ---
+st.markdown("---") # Add a separator before the About section
+with st.expander("About this App"):
+    st.markdown(
+        """
+        This application recommends music based on various criteria using a comprehensive dataset of track features.
+        
+        **Techniques Used:**
+        - **Data Handling:** Utilizes `pandas` for efficient loading, cleaning, and manipulation of the music dataset.
+        - **Feature Scaling:** Employs `StandardScaler` from `scikit-learn` to normalize numerical audio features, ensuring that all features contribute equally to similarity calculations.
+        - **Content-Based Filtering:** Implements content-based recommendation logic. For track and mood-based recommendations, `cosine_similarity` from `scikit-learn` is used to find songs that are similar in their audio characteristics.
+        - **User Interface:** Built entirely with `Streamlit`, allowing for an interactive and user-friendly web application with minimal code.
+        
+        **Explore recommendations based on:**
+        - **Track Features**: Find songs similar to a selected track based on its audio characteristics.
+        - **Mood**: Get songs that align with a chosen mood (e.g., Happy, Sad, Energetic).
+        - **Artist**: Discover other songs by your favorite artist.
+        - **Danceability**: Find songs suitable for dancing based on a desired 'danceability' score (0.0 to 1.0).
+        """
+    )
+    st.write("---") 
+    st.markdown("**Developed by:**")
+    st.markdown("- Praneeth (2453-207-33085)")
+    st.markdown("- Rishi (245322733124)")
+    st.markdown("- Kevin (245322733127)")
+    st.markdown("---")
+    st.markdown("Built with ❤️ using Streamlit and scikit-learn.")
 
 st.markdown("---")
 st.info("🚀 Your music journey starts here!")
