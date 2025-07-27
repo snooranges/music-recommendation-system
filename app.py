@@ -1,20 +1,24 @@
 import streamlit as st
 import pandas as pd
 import random
+import threading
+import av
+import cv2
+
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics.pairwise import cosine_similarity
-import numpy as np
+from deepface import DeepFace
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
 
-# Set page config for a wider layout and a nice title
-st.set_page_config(page_title="🎵 Music Recommender", layout="wide", initial_sidebar_state="collapsed") # Changed sidebar_state to collapsed as it's less critical now
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="🎵 AI Music Recommender", layout="wide", initial_sidebar_state="collapsed")
 
-# --- Custom CSS for Background Image ---
-# Replace 'YOUR_IMAGE_URL_HERE' with the actual public URL of your background image
+# --- CSS for Background ---
 st.markdown(
     """
     <style>
     .stApp {
-        background-image: url("YOUR_IMAGE_URL_HERE");
+        background-image: url("https://images.unsplash.com/photo-1507838153414-b4b713384a76?q=80&w=2940&auto=format&fit=crop");
         background-size: cover;
         background-position: center;
         background-repeat: no-repeat;
@@ -24,10 +28,32 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
-# --- End Custom CSS ---
 
+# --- CONSTANTS & MAPPINGS ---
+AUDIO_FEATURES = [
+    'danceability', 'energy', 'key', 'loudness', 'mode', 'speechiness',
+    'acousticness', 'instrumentalness', 'liveness', 'valence', 'tempo',
+    'duration_ms'
+]
 
-# --- Data Loading ---
+MOOD_PROFILES = {
+    "Happy": {'valence': 0.8, 'energy': 0.7, 'danceability': 0.7, 'tempo': 120},
+    "Sad": {'valence': 0.2, 'energy': 0.3, 'danceability': 0.3, 'tempo': 70},
+    "Chill": {'valence': 0.6, 'energy': 0.4, 'danceability': 0.5, 'tempo': 90, 'acousticness': 0.7},
+    "Energetic": {'valence': 0.7, 'energy': 0.9, 'danceability': 0.8, 'tempo': 130},
+}
+
+EMOTION_TO_MOOD_MAPPING = {
+    'happy': 'Happy',
+    'sad': 'Sad',
+    'neutral': 'Chill',
+    'surprise': 'Energetic',
+    'angry': 'Energetic',
+    'fear': 'Sad',
+    'disgust': 'Chill'
+}
+
+# --- DATA LOADING & PROCESSING ---
 @st.cache_data
 def load_data():
     df = pd.read_csv("dataset.csv")
@@ -35,33 +61,31 @@ def load_data():
     df = df.drop_duplicates(subset=["artists", "track_name"])
     return df.reset_index(drop=True)
 
-# Load the data
-with st.spinner("Loading music data..."):
-    df = load_data()
-st.success("Music data loaded successfully!")
-
-
-# --- Feature Scaling ---
-audio_features = [
-    'danceability', 'energy', 'key', 'loudness', 'mode', 'speechiness',
-    'acousticness', 'instrumentalness', 'liveness', 'valence', 'tempo',
-    'duration_ms'
-]
-
 @st.cache_resource
 def scale_audio_features(data, features):
     scaler = StandardScaler()
     scaled_features_matrix = scaler.fit_transform(data[features])
     return scaled_features_matrix, scaler
 
-# Scale audio features
-with st.spinner("Processing audio features..."):
-    scaled_features_matrix, audio_scaler = scale_audio_features(df, audio_features)
-st.success("Audio features processed!")
+# --- EMOTION RECOGNITION SETUP ---
+lock = threading.Lock()
+emotion_data = {"dominant_emotion": "neutral"}
 
+class EmotionProcessor(VideoProcessorBase):
+    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+        img = frame.to_ndarray(format="bgr24")
+        try:
+            analysis = DeepFace.analyze(img, actions=['emotion'], enforce_detection=False)
+            if isinstance(analysis, list) and len(analysis) > 0:
+                dominant_emotion = analysis[0]['dominant_emotion']
+                with lock:
+                    emotion_data["dominant_emotion"] = dominant_emotion
+                cv2.putText(img, f"Emotion: {dominant_emotion.capitalize()}", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        except Exception:
+            pass
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-# --- Recommendation Functions ---
-
+# --- RECOMMENDATION LOGIC ---
 def recommend_by_track(track_name, df, scaled_features_matrix, n=5):
     try:
         idx = df[df['track_name'] == track_name].index[0]
@@ -69,181 +93,130 @@ def recommend_by_track(track_name, df, scaled_features_matrix, n=5):
         return None
     
     similarity = cosine_similarity(scaled_features_matrix[idx].reshape(1, -1), scaled_features_matrix).flatten()
+    top_indices = [i for i in similarity.argsort()[-50:][::-1] if i != idx]
     
-    top_indices = similarity.argsort()[-50:][::-1]
-    top_indices = [i for i in top_indices if i != idx]
-    
-    if len(top_indices) == 0:
-        return None
-        
-    selected = random.sample(list(top_indices), min(n, len(top_indices)))
-    
+    if not top_indices: return None
+    selected = random.sample(top_indices, min(n, len(top_indices)))
     return df.iloc[selected][["track_name", "artists"]]
 
-mood_profiles = {
-    "Happy": {'valence': 0.8, 'energy': 0.7, 'danceability': 0.7, 'tempo': 120},
-    "Sad": {'valence': 0.2, 'energy': 0.3, 'danceability': 0.3, 'tempo': 70},
-    "Chill": {'valence': 0.6, 'energy': 0.4, 'danceability': 0.5, 'tempo': 90, 'acousticness': 0.7},
-    "Energetic": {'valence': 0.7, 'energy': 0.9, 'danceability': 0.8, 'tempo': 130},
-}
+def recommend_by_mood(mood, df, audio_scaler, features, scaled_features_matrix, n=5):
+    if mood not in MOOD_PROFILES: return None
 
-def recommend_by_mood(mood, df, audio_scaler, audio_features, scaled_features_matrix, n=5):
-    if mood not in mood_profiles:
-        return None
-
-    mood_vec_raw = pd.DataFrame([df[audio_features].mean().values], columns=audio_features)
-    for feature, value in mood_profiles[mood].items():
-        if feature in audio_features:
+    mood_vec_raw = pd.DataFrame([df[features].mean().values], columns=features)
+    for feature, value in MOOD_PROFILES[mood].items():
+        if feature in features:
             mood_vec_raw[feature] = value
 
-    mood_vec_scaled = audio_scaler.transform(mood_vec_raw[audio_features])
-    
+    mood_vec_scaled = audio_scaler.transform(mood_vec_raw[features])
     similarity = cosine_similarity(mood_vec_scaled, scaled_features_matrix).flatten()
     
     top_indices = similarity.argsort()[-50:][::-1]
-    
     selected = random.sample(list(top_indices), min(n, len(top_indices)))
-    
     return df.iloc[selected][["track_name", "artists"]]
 
 def recommend_by_artist(artist_name, df, n=5):
     artist_songs = df[df['artists'] == artist_name]
+    if artist_songs.empty: return None
     
-    if artist_songs.empty:
-        return None
-    
-    if len(artist_songs) <= n:
-        return artist_songs[["track_name", "artists"]].sample(frac=1, random_state=42).reset_index(drop=True)
-    else:
-        return artist_songs[["track_name", "artists"]].sample(n=n, random_state=42).reset_index(drop=True)
+    sample_n = min(n, len(artist_songs))
+    return artist_songs.sample(n=sample_n)[["track_name", "artists"]]
 
 def recommend_by_danceability(target_danceability, df, n=5):
-    df['danceability_diff'] = abs(df['danceability'] - target_danceability)
-    
-    recommended_songs = df.nsmallest(n, 'danceability_diff')
-    
-    recommended_songs = recommended_songs.drop(columns=['danceability_diff'])
-    
+    df_copy = df.copy()
+    df_copy['danceability_diff'] = abs(df_copy['danceability'] - target_danceability)
+    recommended_songs = df_copy.nsmallest(n, 'danceability_diff')
     return recommended_songs[["track_name", "artists", "danceability"]]
 
+# --- MAIN APP UI ---
+st.title("🎧 AI Music Recommender")
 
-# --- Streamlit UI ---
+with st.spinner("Loading music data..."):
+    df = load_data()
+    scaled_features_matrix, audio_scaler = scale_audio_features(df, AUDIO_FEATURES)
 
-st.title("🎧 Music Recommendation System")
-
-# Recommendation options moved to main tab
 st.header("Choose Recommendation Type:")
 mode = st.radio(
-    "Select your preferred method:", # Label changed slightly as it's not in sidebar anymore
-    ["🎶 Based on track features", "😊 Based on mood only", "🎤 Based on artist", "🕺 Based on danceability"],
-    horizontal=True # Display radio buttons horizontally for better main tab layout
+    "Select your preferred method:",
+    ["🎶 Based on track features", "😊 Based on mood only", "🎤 Based on artist", "🕺 Based on danceability", "🙂 Based on your emotion"],
+    horizontal=True
 )
-
-# Main content area based on selected mode
-st.header(f"--- {mode} ---")
+st.write("---")
 
 if mode == "🎶 Based on track features":
     st.subheader("Find Similar Tracks by Audio Features")
     selected_track = st.selectbox("🎵 Pick a track:", sorted(df["track_name"].unique()))
-    num_recommendations = st.slider("🔢 How many recommendations?", 1, 20, 5)
-    
-    if st.button("🚀 Recommend by Track Features"):
-        with st.spinner("Finding similar tracks..."):
-            result = recommend_by_track(selected_track, df, scaled_features_matrix, n=num_recommendations)
-        if selected_track:
-            if result is not None and not result.empty:
-                st.success(f"✨ Here are tracks similar to: **{selected_track}**")
-                st.dataframe(result.style.set_properties(**{'text-align': 'left'}))
-            else:
-                st.info("💡 Could not find similar tracks for the selected track. Try another one!")
+    num_recs = st.slider("🔢 How many recommendations?", 1, 20, 5, key="track_slider")
+    if st.button("🚀 Recommend by Track"):
+        result = recommend_by_track(selected_track, df, scaled_features_matrix, n=num_recs)
+        if result is not None:
+            st.success(f"✨ Here are tracks similar to: **{selected_track}**")
+            st.dataframe(result)
         else:
-            st.warning("⚠️ Please select a track to get recommendations.")
+            st.error("Could not find recommendations.")
 
 elif mode == "😊 Based on mood only":
     st.subheader("Discover Tracks for Your Mood")
-    mood_choice = st.selectbox("😊 Select your mood:", list(mood_profiles.keys()))
-    num_recommendations_mood = st.slider("🔢 How many recommendations?", 1, 20, 5)
-    
+    mood_choice = st.selectbox("😊 Select your mood:", list(MOOD_PROFILES.keys()))
+    num_recs = st.slider("🔢 How many recommendations?", 1, 20, 5, key="mood_slider")
     if st.button("🚀 Recommend by Mood"):
-        with st.spinner(f"Finding tracks for {mood_choice} mood..."):
-            result = recommend_by_mood(mood_choice, df, audio_scaler, audio_features, scaled_features_matrix, n=num_recommendations_mood)
-        if mood_choice:
-            if result is not None and not result.empty:
-                st.success(f"🎉 Here are tracks recommended for mood: **{mood_choice}**")
-                st.dataframe(result.style.set_properties(**{'text-align': 'left'}))
-            else:
-                st.info("💡 Could not find tracks matching this mood profile. Try another mood!")
+        result = recommend_by_mood(mood_choice, df, audio_scaler, AUDIO_FEATURES, scaled_features_matrix, n=num_recs)
+        if result is not None:
+            st.success(f"🎉 Here are tracks for a **{mood_choice}** mood:")
+            st.dataframe(result)
         else:
-            st.warning("⚠️ Please select a mood.")
+            st.error("Could not find recommendations.")
 
 elif mode == "🎤 Based on artist":
     st.subheader("Explore More from an Artist")
     selected_artist = st.selectbox("🎤 Pick an artist:", sorted(df["artists"].unique()))
-    num_recommendations_artist = st.slider("🔢 How many recommendations?", 1, 20, 5)
-    
+    num_recs = st.slider("🔢 How many recommendations?", 1, 20, 5, key="artist_slider")
     if st.button("🚀 Recommend by Artist"):
-        with st.spinner(f"Finding tracks by {selected_artist}..."):
-            result = recommend_by_artist(selected_artist, df, n=num_recommendations_artist)
-        if selected_artist:
-            if result is not None and not result.empty:
-                st.success(f"🎶 Here are other tracks by: **{selected_artist}**")
-                st.dataframe(result.style.set_properties(**{'text-align': 'left'}))
-            else:
-                st.info("💡 Artist not found or no other tracks available. Try another artist!")
+        result = recommend_by_artist(selected_artist, df, n=num_recs)
+        if result is not None:
+            st.success(f"🎶 Here are other tracks by: **{selected_artist}**")
+            st.dataframe(result)
         else:
-            st.warning("⚠️ Please select an artist.")
+            st.error("Could not find recommendations.")
 
 elif mode == "🕺 Based on danceability":
     st.subheader("Find Tracks by Danceability Score")
-    desired_danceability = st.slider("💃 Select desired danceability (0.0 = low, 1.0 = high):", 0.0, 1.0, 0.7, 0.05)
-    num_recommendations_danceability = st.slider("🔢 How many recommendations?", 1, 20, 5)
-
+    desired_danceability = st.slider("💃 Select desired danceability (0.0 = low, 1.0 = high):", 0.0, 1.0, 0.7, 0.01)
+    num_recs = st.slider("🔢 How many recommendations?", 1, 20, 5, key="dance_slider")
     if st.button("🚀 Recommend by Danceability"):
-        with st.spinner(f"Finding tracks with danceability around {desired_danceability:.2f}..."):
-            result = recommend_by_danceability(desired_danceability, df, n=num_recommendations_danceability)
-        if desired_danceability is not None:
-            if result is not None and not result.empty:
-                st.success(f"🕺🎶 Tracks with danceability close to: **{desired_danceability:.2f}**")
-                st.dataframe(result.style.set_properties(**{'text-align': 'left'}))
-            else:
-                st.info("💡 Could not find tracks for the selected danceability. Adjust the slider!")
+        result = recommend_by_danceability(desired_danceability, df, n=num_recs)
+        if result is not None:
+            st.success(f"🕺 Tracks with danceability close to: **{desired_danceability:.2f}**")
+            st.dataframe(result)
         else:
-            st.warning("⚠️ Please select a danceability value.")
+            st.error("Could not find recommendations.")
+            
+elif mode == "🙂 Based on your emotion":
+    st.subheader("Get Recommendations Based on Your Live Emotion")
+    st.write("Enable your webcam below. The app will detect your emotion in real-time. Then, click the button!")
+    webrtc_streamer(key="emotion-detection", video_processor_factory=EmotionProcessor, rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
+    num_recs = st.slider("🔢 How many recommendations?", 1, 20, 5, key="emotion_slider")
+    if st.button("🚀 Recommend Songs for My Emotion"):
+        with lock:
+            detected_emotion = emotion_data["dominant_emotion"]
+        
+        st.info(f"Detected emotion: **{detected_emotion.capitalize()}**")
+        target_mood = EMOTION_TO_MOOD_MAPPING.get(detected_emotion, "Chill")
+        st.write(f"Finding songs for a '{target_mood}' mood...")
+        
+        result = recommend_by_mood(target_mood, df, audio_scaler, AUDIO_FEATURES, scaled_features_matrix, n=num_recs)
+        if result is not None:
+            st.success(f"🎉 Here are songs recommended for your '{target_mood}' mood:")
+            st.dataframe(result)
+        else:
+            st.error("Could not find recommendations.")
 
-
-# Dataset sample in the sidebar (remains in sidebar)
+# --- ABOUT SECTION ---
 st.sidebar.markdown("---")
-st.sidebar.subheader("Dataset Sample (First 5 Rows)")
-st.sidebar.dataframe(df.head(), height=200)
-
-
-# --- About section moved to the very bottom of the main content ---
-st.markdown("---") # Add a separator before the About section
-with st.expander("About this App"):
+with st.sidebar.expander("About this App"):
     st.markdown(
         """
-        This application recommends music based on various criteria using a comprehensive dataset of track features.
-        
-        **Techniques Used:**
-        - **Data Handling:** Utilizes `pandas` for efficient loading, cleaning, and manipulation of the music dataset.
-        - **Feature Scaling:** Employs `StandardScaler` from `scikit-learn` to normalize numerical audio features, ensuring that all features contribute equally to similarity calculations.
-        - **Content-Based Filtering:** Implements content-based recommendation logic. For track and mood-based recommendations, `cosine_similarity` from `scikit-learn` is used to find songs that are similar in their audio characteristics.
-        - **User Interface:** Built entirely with `Streamlit`, allowing for an interactive and user-friendly web application with minimal code.
-        
-        **Explore recommendations based on:**
-        - **Track Features**: Find songs similar to a selected track based on its audio characteristics.
-        - **Mood**: Get songs that align with a chosen mood (e.g., Happy, Sad, Energetic).
-        - **Artist**: Discover other songs by your favorite artist.
-        - **Danceability**: Find songs suitable for dancing based on a desired 'danceability' score (0.0 to 1.0).
+        This AI-powered application recommends music using several advanced techniques. 
+        It analyzes audio features and can even detect your live emotion via webcam to suggest a playlist.
         """
     )
-    st.write("---") 
-    st.markdown("**Developed by:**")
-    st.markdown("- Praneeth (2453-207-33085)")
-    st.markdown("- Rishi (245322733124)")
-    st.markdown("- Kevin (245322733127)")
-    st.markdown("---")
-    st.markdown("Built with ❤️ using Streamlit and scikit-learn.")
-
-st.markdown("---")
-st.info("🚀 Your music journey starts here!")
+    st.markdown("**Developed by:** Your Name/Group")
