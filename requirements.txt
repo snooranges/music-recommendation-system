@@ -1,4 +1,7 @@
 streamlit
 pandas
 scikit-learn
-numpy
+deepface
+opencv-python
+streamlit-webrtc
+av
