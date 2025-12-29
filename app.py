@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import random
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics.pairwise import cosine_similarity
@@ -12,16 +11,20 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- BACKGROUND CSS ---
+# --- SOLID BLUE BACKGROUND ---
 st.markdown(
     """
     <style>
     .stApp {
-        background-image: url("https://images.unsplash.com/photo-1507838153414-b4b713384a76?q=80&w=2940&auto=format&fit=crop");
-        background-size: cover;
-        background-position: center;
-        background-repeat: no-repeat;
-        background-attachment: fixed;
+        background-color: #0E4DA4; /* solid blue */
+    }
+
+    h1, h2, h3, h4, h5, h6, p, span, label, div {
+        color: white !important;
+    }
+
+    .stDataFrame {
+        background-color: white;
     }
     </style>
     """,
@@ -81,9 +84,6 @@ def scale_features(df, features):
 
 # --- RECOMMENDATION FUNCTIONS ---
 def recommend_by_track(track_name, df, scaled_matrix, n=5):
-    if track_name not in df['track_name'].values:
-        return None
-
     idx = df.index[df['track_name'] == track_name][0]
     similarity = cosine_similarity(
         scaled_matrix[idx].reshape(1, -1),
@@ -96,9 +96,6 @@ def recommend_by_track(track_name, df, scaled_matrix, n=5):
     return df.iloc[top_indices][["track_name", "artists"]]
 
 def recommend_by_mood(mood, df, scaler, features, scaled_matrix, n=5):
-    if mood not in MOOD_PROFILES:
-        return None
-
     mood_vector = pd.DataFrame([[0.5] * len(features)], columns=features)
 
     for feature, value in MOOD_PROFILES[mood].items():
@@ -113,8 +110,6 @@ def recommend_by_mood(mood, df, scaler, features, scaled_matrix, n=5):
 
 def recommend_by_artist(artist, df, n=5):
     matches = df[df['artists'].str.contains(artist, case=False, na=False)]
-    if matches.empty:
-        return None
     return matches.sample(n=min(n, len(matches)))[["track_name", "artists"]]
 
 def recommend_by_danceability(target, df, n=5):
@@ -144,67 +139,27 @@ mode = st.radio(
 
 st.divider()
 
-# --- UI MODES ---
 if mode == "🎶 Based on track features":
-    st.subheader("Find Similar Tracks")
     track = st.selectbox("🎵 Select a track", sorted(df["track_name"].unique()))
     n = st.slider("Number of recommendations", 1, 20, 5)
-
     if st.button("🚀 Recommend"):
-        result = recommend_by_track(track, df, scaled_matrix, n)
-        if result is not None:
-            st.success(f"Tracks similar to **{track}**")
-            st.dataframe(result, use_container_width=True)
-        else:
-            st.error("No recommendations found.")
+        st.dataframe(recommend_by_track(track, df, scaled_matrix, n), use_container_width=True)
 
 elif mode == "😊 Based on mood":
-    st.subheader("Mood-Based Music Discovery")
     mood = st.selectbox("Select mood", list(MOOD_PROFILES.keys()))
     n = st.slider("Number of recommendations", 1, 20, 5)
-
     if st.button("🚀 Recommend"):
-        result = recommend_by_mood(mood, df, scaler, AUDIO_FEATURES, scaled_matrix, n)
-        if result is not None:
-            st.success(f"Songs for **{mood}** mood")
-            st.dataframe(result, use_container_width=True)
-        else:
-            st.error("No recommendations found.")
+        st.dataframe(recommend_by_mood(mood, df, scaler, AUDIO_FEATURES, scaled_matrix, n), use_container_width=True)
 
 elif mode == "🎤 Based on artist":
-    st.subheader("Explore an Artist")
     artist = st.selectbox("Select artist", sorted(df["artists"].unique()))
     n = st.slider("Number of recommendations", 1, 20, 5)
-
     if st.button("🚀 Recommend"):
-        result = recommend_by_artist(artist, df, n)
-        if result is not None:
-            st.success(f"More tracks by **{artist}**")
-            st.dataframe(result, use_container_width=True)
-        else:
-            st.error("No tracks found.")
+        st.dataframe(recommend_by_artist(artist, df, n), use_container_width=True)
 
 elif mode == "🕺 Based on danceability":
-    st.subheader("Danceability-Based Recommendations")
     target = st.slider("Danceability (0.0 – 1.0)", 0.0, 1.0, 0.7, 0.01)
     n = st.slider("Number of recommendations", 1, 20, 5)
-
     if st.button("🚀 Recommend"):
-        result = recommend_by_danceability(target, df, n)
-        if result is not None:
-            st.success("Recommended tracks")
-            st.dataframe(result, use_container_width=True)
-        else:
-            st.error("No recommendations found.")
-
-# --- SIDEBAR ---
-st.sidebar.markdown("---")
-with st.sidebar.expander("About this App"):
-    st.markdown(
-        """
-        This AI-powered music recommender uses audio features and similarity
-        metrics to suggest songs based on tracks, mood, artists, and danceability.
-        """
-    )
-    st.markdown("**Developed by:** Your Name / Team")
+        st.dataframe(recommend_by_danceability(target, df, n), use_container_width=True)
 
